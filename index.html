@@ -295,6 +295,19 @@ footer{border-top:1px solid var(--line);padding:64px 0 32px;}
 .pager .gap{color:var(--ink-faint);font-family:var(--mono);font-size:12px;padding:0 2px;}
 @media (max-width:560px){.pager button{min-width:34px;height:34px;padding:0 9px;font-size:13px;}}
 
+/* Inline prompt panel: used when the page sits in a plain iframe, where an
+   overlay could open outside the part of the iframe the visitor can see. */
+.inline-panel{
+  grid-column:1/-1;border:1px solid var(--line-strong);border-radius:var(--radius);
+  background:#fff;padding:20px 22px;box-shadow:0 6px 20px rgba(20,22,26,.06);
+}
+.inline-panel .ip-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:14px;}
+.inline-panel h3{font-size:18px;font-weight:700;letter-spacing:-.01em;margin:6px 0 4px;}
+.inline-panel .ip-desc{font-size:13.5px;color:var(--ink-soft);}
+.inline-panel .prompt-full{max-height:420px;overflow:auto;}
+.inline-panel .ip-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap;}
+.inline-panel .meta{font-size:12.5px;color:var(--ink-faint);}
+
 /* Prompt viewer modal */
 .modal{position:fixed;inset:0;z-index:90;display:none;align-items:center;justify-content:center;padding:24px 16px;background:rgba(20,22,26,.45);}
 .modal.open{display:flex;}
@@ -1017,8 +1030,8 @@ function renderPager(totalPages){
    the page cannot scroll itself, so it asks the Tilda page to do it. */
 function scrollToLibraryTop(){
   const lib = document.getElementById('library');
-  if(EMBEDDED){
-    if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  if(hasParentHelper){
     parent.postMessage({type:'pmwill:scrollto', offset: Math.max(0, lib.offsetTop - 20)}, '*');
   } else {
     lib.scrollIntoView({behavior:'smooth', block:'start'});
@@ -1066,8 +1079,10 @@ render();
    the prompt viewer opens where the visitor is looking. The snippet for the
    Tilda HTML block is in the README of this repository. */
 const EMBEDDED = window.self !== window.top;
+/* True only if the embedding page runs the optional helper script. Without it
+   the page behaves like a normal scrollable page inside the iframe. */
+let hasParentHelper = false;
 if(EMBEDDED){
-  document.documentElement.classList.add('embedded');
   let lastH = 0;
   const postHeight = () => {
     const h = Math.ceil(Math.max(
@@ -1089,6 +1104,7 @@ if(EMBEDDED){
     const d = e.data;
     if(!d || d.type !== 'pmwill:viewport') return;
     const root = document.documentElement;
+    if(!hasParentHelper){ hasParentHelper = true; root.classList.add('embedded'); }
     root.style.setProperty('--vp-top', Math.round(d.top) + 'px');
     root.style.setProperty('--vp-height', Math.round(d.height) + 'px');
   });
@@ -1110,21 +1126,65 @@ function openModal(idx){
   lastFocus = document.activeElement;
   if(EMBEDDED) parent.postMessage({type:'pmwill:ping'}, '*');
   modal.classList.add('open');
-  if(!EMBEDDED) document.body.style.overflow = 'hidden';
+  if(!hasParentHelper) document.body.style.overflow = 'hidden';
   modal.querySelector('.modal-body').scrollTop = 0;
   document.getElementById('modalClose').focus();
 }
 function closeModal(){
   modal.classList.remove('open');
-  if(!EMBEDDED) document.body.style.overflow = '';
+  if(!hasParentHelper) document.body.style.overflow = '';
   if(lastFocus) lastFocus.focus();
 }
 document.getElementById('modalClose').addEventListener('click', closeModal);
 modal.addEventListener('click', e => { if(e.target === modal) closeModal(); });
 document.addEventListener('keydown', e => { if(e.key === 'Escape' && modal.classList.contains('open')) closeModal(); });
+/* Shared markup for the how-to box, used by both viewers. */
+const HOWTO_HTML = document.querySelector('#promptModal .howto').outerHTML;
+
+function closeInline(){
+  const open = libraryGrid.querySelector('.inline-panel');
+  if(open) open.remove();
+}
+
+function openInline(idx, card){
+  const p = PROMPTS[idx];
+  const wasOpen = card.nextElementSibling && card.nextElementSibling.classList.contains('inline-panel')
+                  && card.nextElementSibling.dataset.idx === String(idx);
+  closeInline();
+  if(wasOpen) return;
+  const panel = document.createElement('div');
+  panel.className = 'inline-panel';
+  panel.dataset.idx = idx;
+  panel.innerHTML = `
+    <div class="ip-head">
+      <div>
+        <span class="prompt-cat">${esc(catName(p.cat))}</span>
+        <h3>${esc(p.t)}</h3>
+        <p class="ip-desc">${esc(p.desc)}</p>
+      </div>
+      <button class="modal-close" aria-label="Close">×</button>
+    </div>
+    ${HOWTO_HTML}
+    <pre class="prompt-full"></pre>
+    <div class="ip-foot">
+      <span class="meta">${esc(p.id)} · ${esc(p.diff)} · ⏱ ${esc(p.time)}</span>
+      <button class="copy-btn" data-idx="${idx}">Copy Prompt</button>
+    </div>`;
+  panel.querySelector('.prompt-full').textContent = p.body;
+  panel.querySelector('.modal-close').addEventListener('click', closeInline);
+  /* Open under the whole row the card sits in, so the grid stays tidy. */
+  const cards = [...libraryGrid.querySelectorAll('.prompt-card')];
+  const row = cards.filter(c => c.offsetTop === card.offsetTop);
+  (row[row.length-1] || card).after(panel);
+  panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
 document.addEventListener('click', e => {
   const t = e.target.closest('.open-prompt');
-  if(t) openModal(Number(t.dataset.idx));
+  if(!t) return;
+  const idx = Number(t.dataset.idx);
+  if(EMBEDDED && !hasParentHelper) openInline(idx, t.closest('.prompt-card'));
+  else openModal(idx);
 });
 
 /* ============ Copy to clipboard ============ */
@@ -1138,28 +1198,54 @@ function showToast(msg){
   toastTimer = setTimeout(()=>toast.classList.remove('show'), 2200);
 }
 
+/* Copying inside an iframe: the modern clipboard API is blocked unless the
+   embedding page allows it, so fall back to the old selection method, and only
+   report failure if both routes fail. */
+function legacyCopy(text){
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly','');
+  ta.style.position = 'fixed';
+  ta.style.top = '0';
+  ta.style.left = '0';
+  ta.style.width = '1px';
+  ta.style.height = '1px';
+  ta.style.padding = '0';
+  ta.style.border = 'none';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  const sel = document.getSelection();
+  const saved = sel.rangeCount ? sel.getRangeAt(0) : null;
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try{ ok = document.execCommand('copy'); }catch(err){ ok = false; }
+  document.body.removeChild(ta);
+  if(saved){ sel.removeAllRanges(); sel.addRange(saved); }
+  return ok;
+}
+
+async function copyText(text){
+  if(legacyCopy(text)) return true;
+  if(navigator.clipboard && window.isSecureContext){
+    try{ await navigator.clipboard.writeText(text); return true; }catch(err){ /* falls through */ }
+  }
+  return false;
+}
+
 document.addEventListener('click', async (e) => {
   const btn = e.target.closest('.copy-btn');
   if(!btn) return;
   const idx = Number(btn.dataset.idx);
   const p = PROMPTS[idx];
-  const text = p.body;
-  try{
-    if(navigator.clipboard && window.isSecureContext){
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
-      document.body.appendChild(ta); ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
-    btn.textContent = 'Copied ✓';
+  if(await copyText(p.body)){
+    btn.textContent = 'Copied \u2713';
     btn.classList.add('copied');
     showToast(`"${p.t}" copied to clipboard`);
     setTimeout(()=>{ btn.textContent = 'Copy Prompt'; btn.classList.remove('copied'); }, 1600);
-  }catch(err){
-    showToast('Could not copy. Open the prompt with View and copy it manually.');
+  } else {
+    showToast('Could not copy. Open the prompt with View, then select the text and copy it.');
   }
 });
 </script>
