@@ -1205,8 +1205,10 @@ function legacyCopy(text){
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.setAttribute('readonly','');
-  ta.style.position = 'fixed';
-  ta.style.top = '0';
+  /* Sit at the current scroll position and never take scroll with focus:
+     focusing an element inside an iframe otherwise jumps the host page. */
+  ta.style.position = 'absolute';
+  ta.style.top = window.pageYOffset + 'px';
   ta.style.left = '0';
   ta.style.width = '1px';
   ta.style.height = '1px';
@@ -1214,24 +1216,32 @@ function legacyCopy(text){
   ta.style.border = 'none';
   ta.style.opacity = '0';
   document.body.appendChild(ta);
+
+  const keepX = window.pageXOffset, keepY = window.pageYOffset;
+  const wasFocused = document.activeElement;
   const sel = document.getSelection();
-  const saved = sel.rangeCount ? sel.getRangeAt(0) : null;
-  ta.focus();
+  const saved = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+
+  try{ ta.focus({preventScroll:true}); }catch(err){ ta.focus(); }
   ta.select();
   ta.setSelectionRange(0, text.length);
   let ok = false;
   try{ ok = document.execCommand('copy'); }catch(err){ ok = false; }
+
   document.body.removeChild(ta);
-  if(saved){ sel.removeAllRanges(); sel.addRange(saved); }
+  if(saved && sel){ sel.removeAllRanges(); sel.addRange(saved); }
+  if(wasFocused && wasFocused.focus){ try{ wasFocused.focus({preventScroll:true}); }catch(err){} }
+  window.scrollTo(keepX, keepY);
   return ok;
 }
 
 async function copyText(text){
-  if(legacyCopy(text)) return true;
+  /* The modern API never moves the page, so try it first. It is blocked in
+     some embeds, and then the older method above takes over. */
   if(navigator.clipboard && window.isSecureContext){
     try{ await navigator.clipboard.writeText(text); return true; }catch(err){ /* falls through */ }
   }
-  return false;
+  return legacyCopy(text);
 }
 
 document.addEventListener('click', async (e) => {
